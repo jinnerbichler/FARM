@@ -31,7 +31,7 @@
 What is it?
 ############
 FARM makes cutting edge **Transfer Learning** for NLP simple.
-It is a home for all species of pretrained language models (e.g. BERT) that can be adapted to different
+Building upon `transformers <https://github.com/huggingface/pytorch-transformers>`_, FARM is a home for all species of pretrained language models (e.g. BERT) that can be adapted to different
 **domain languages** or **down-stream tasks**.
 With FARM you can easily create SOTA NLP models for tasks like document classification, NER or question answering.
 The **standardized interfaces** for language models and prediction heads allow flexible extension by researchers and easy application for practitioners.
@@ -46,11 +46,13 @@ Core features
 - **Smooth upgrading** to new language models
 - Powerful **experiment tracking** & execution
 - Simple **deployment** and **visualization** to showcase your model
+- Tasks: Question Answering, LM Domain Adaptation, NER, (Multilabel) Doc Classification
 
 Resources
 ##############
 - `Full Documentation <https://farm.deepset.ai>`_
 - `Intro to Transfer Learning (Blog) <https://medium.com/voice-tech-podcast/https-medium-com-deepset-ai-transfer-learning-entering-a-new-era-in-nlp-db523d9e667b>`_
+- `Intro to Transfer Learning & FARM (Video) <https://www.youtube.com/watch?v=hoDgtvE-u9E&feature=youtu.be>`_
 - Tutorial 1 (Overview of building blocks): `Jupyter notebook <https://github.com/deepset-ai/FARM/blob/master/tutorials/1_farm_building_blocks.ipynb>`_  or `Colab <https://colab.research.google.com/drive/130_7dgVC3VdLBPhiEkGULHmqSlflhmVM>`_
 - Tutorial 2 (How to use custom datasets): `Colab notebook <https://colab.research.google.com/drive/1Ce_wWu-fsy_g16jaGioe8M5mAFdLN1Yx>`_
 
@@ -109,7 +111,7 @@ Model
 ************
 AdaptiveModel = Language Model + Prediction Head(s)
 With this modular approach you can easily add prediction heads (multitask learning) and re-use them for different types of language model.
-`(Learn more) <https://farm.deepset.ai/modeling.html>`_
+`(Learn more) <https://farm.deepset.ai/modeling.html>`__
 
 
 .. image:: https://raw.githubusercontent.com/deepset-ai/FARM/master/docs/img/adaptive_model_no_bg_small.jpg
@@ -119,7 +121,7 @@ Data Processing
 ********************
 Custom Datasets can be loaded by customizing the Processor. It converts "raw data" into PyTorch Datasets.
 Much of the heavy lifting is then handled behind the scenes to make it fast & simple to debug.
-`(Learn more) <https://farm.deepset.ai/data_handling.html>`_
+`(Learn more) <https://farm.deepset.ai/data_handling.html>`__
 
 .. image:: https://raw.githubusercontent.com/deepset-ai/FARM/master/docs/img/data_silo_no_bg_small.jpg
 
@@ -133,7 +135,7 @@ Upcoming features
 
 Acknowledgements
 ###################
-- FARM is built upon parts of the great `pytorch-transformers <https://github.com/huggingface/pytorch-transformers>`_  repository from Huggingface. It utilizes their implementations of the BERT model and Tokenizer.
+- FARM is built upon parts of the great `transformers <https://github.com/huggingface/pytorch-transformers>`_  repository from Huggingface. It utilizes their implementations of the BERT model and Tokenizer.
 - The original BERT model and `paper <https://arxiv.org/abs/1810.04805>`_  was published by Jacob Devlin, Ming-Wei Chang, Kenton Lee and Kristina Toutanova.
 
 Citation

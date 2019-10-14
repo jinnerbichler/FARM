@@ -56,12 +56,12 @@ class DataSilo:
         return dataset
 
     def _get_dataset(self, filename):
-        dicts = self.processor._file_to_dicts(filename)
+        dicts = self.processor.file_to_dicts(filename)
         #shuffle list of dicts here if we later want to have a random dev set splitted from train set
-        if filename == self.processor.train_filename:
+        if self.processor.train_filename in filename:
             if not self.processor.dev_filename:
                 if self.processor.dev_split > 0.0:
-                    dicts = random.shuffle(dicts)
+                    random.shuffle(dicts)
 
         dict_batches_to_process = int(len(dicts) / self.multiprocessing_chunk_size)
         num_cpus = min(mp.cpu_count(), self.max_processes,  dict_batches_to_process) or 1
@@ -81,8 +81,10 @@ class DataSilo:
             )
 
             datasets = []
-            for dataset, tensor_names in tqdm(results, total=len(dicts)/self.multiprocessing_chunk_size):
-                datasets.append(dataset)
+            with tqdm(total=len(dicts), unit=' Dicts') as pbar:
+                for dataset, tensor_names in results:
+                    datasets.append(dataset)
+                    pbar.update(self.multiprocessing_chunk_size)
             
             concat_datasets = ConcatDataset(datasets)
             return concat_datasets, tensor_names
