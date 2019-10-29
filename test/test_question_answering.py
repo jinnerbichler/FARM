@@ -4,10 +4,10 @@ from farm.data_handler.data_silo import DataSilo
 from farm.data_handler.processor import SquadProcessor
 from farm.infer import Inferencer
 from farm.modeling.adaptive_model import AdaptiveModel
-from farm.modeling.language_model import Bert
+from farm.modeling.language_model import LanguageModel
 from farm.modeling.optimization import initialize_optimizer
 from farm.modeling.prediction_head import QuestionAnsweringHead
-from farm.modeling.tokenization import BertTokenizer
+from farm.modeling.tokenization import Tokenizer
 from farm.train import Trainer
 from farm.utils import set_all_seeds, initialize_device_settings
 
@@ -22,7 +22,7 @@ def test_qa(caplog):
     evaluate_every = 4
     base_LM_model = "bert-base-cased"
 
-    tokenizer = BertTokenizer.from_pretrained(
+    tokenizer = Tokenizer.load(
         pretrained_model_name_or_path=base_LM_model, do_lower_case=False
     )
     label_list = ["start_token", "end_token"]
@@ -34,12 +34,12 @@ def test_qa(caplog):
         dev_filename="dev-sample.json",
         test_filename=None,
         data_dir="samples/qa",
-        labels=label_list,
+        label_list=label_list,
         metric="squad"
     )
 
     data_silo = DataSilo(processor=processor, batch_size=batch_size)
-    language_model = Bert.load(base_LM_model)
+    language_model = LanguageModel.load(base_LM_model)
     prediction_head = QuestionAnsweringHead(layer_dims=[768, len(label_list)])
     model = AdaptiveModel(
         language_model=language_model,

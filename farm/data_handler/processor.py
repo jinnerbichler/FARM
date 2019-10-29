@@ -29,13 +29,11 @@ from farm.data_handler.utils import (
     read_squad_file,
     is_json,
 )
-from farm.modeling.tokenization import BertTokenizer, tokenize_with_metadata
+from farm.modeling.tokenization import Tokenizer, tokenize_with_metadata, truncate_sequences
 from farm.utils import MLFlowLogger as MlLogger
-from farm.data_handler.samples import get_sentence_pair
+from farm.data_handler.utils import get_sentence_pair
 
 logger = logging.getLogger(__name__)
-
-TOKENIZER_MAP = {"BertTokenizer": BertTokenizer}
 
 
 class Processor(ABC):
@@ -166,14 +164,13 @@ class Processor(ABC):
         processor_config_file = os.path.join(load_dir, "processor_config.json")
         config = json.load(open(processor_config_file))
         # init tokenizer
-        tokenizer = TOKENIZER_MAP[config["tokenizer"]].from_pretrained(
-            load_dir,
-            do_lower_case=config["lower_case"],
-            never_split_chars=config.get("never_split_chars", None),
-        )
-        # add custom vocab to tokenizer if available
-        if os.path.exists(os.path.join(load_dir, "custom_vocab.txt")):
-            tokenizer.add_custom_vocab(os.path.join(load_dir, "custom_vocab.txt"))
+        if "lower_case" in config.keys():
+            logger.warning("Loading tokenizer from deprecated FARM config. "
+                           "If you used `custom_vocab` or `never_split_chars`, this won't work anymore.")
+            tokenizer = Tokenizer.load(load_dir, tokenizer_class=config["tokenizer"], do_lower_case=config["lower_case"])
+        else:
+            tokenizer = Tokenizer.load(load_dir, tokenizer_class=config["tokenizer"])
+
         # we have to delete the tokenizer string from config, because we pass it as Object
         del config["tokenizer"]
 
@@ -199,10 +196,7 @@ class Processor(ABC):
         config = self.generate_config()
         # save tokenizer incl. attributes
         config["tokenizer"] = self.tokenizer.__class__.__name__
-        self.tokenizer.save_vocabulary(save_dir)
-        # TODO make this generic to other tokenizers. We will probably want an own abstract Tokenizer
-        config["lower_case"] = self.tokenizer.basic_tokenizer.do_lower_case
-        config["never_split_chars"] = self.tokenizer.basic_tokenizer.never_split_chars
+        self.tokenizer.save_pretrained(save_dir)
         # save processor
         config["processor"] = self.__class__.__name__
         output_config_file = os.path.join(save_dir, "processor_config.json")
@@ -279,41 +273,11 @@ class Processor(ABC):
         dataset, tensor_names = convert_features_to_dataset(features=features_flat)
         return dataset, tensor_names
 
-    # def dataset_from_file(self, file, log_time=True):
-    #     """
-    #     Contains all the functionality to turn a data file into a PyTorch Dataset and a
-    #     list of tensor names. This is used for training and evaluation.
-    #
-    #     :param file: Name of the file containing the data.
-    #     :type file: str
-    #     :return: a Pytorch dataset and a list of tensor names.
-    #     """
-    #     if log_time:
-    #         a = time.time()
-    #         self._init_baskets_from_file(file)
-    #         b = time.time()
-    #         MlLogger.log_metrics(metrics={"t_from_file": (b - a) / 60}, step=0)
-    #         self._init_samples_in_baskets()
-    #         c = time.time()
-    #         MlLogger.log_metrics(metrics={"t_init_samples": (c - b) / 60}, step=0)
-    #         self._featurize_samples()
-    #         d = time.time()
-    #         MlLogger.log_metrics(metrics={"t_featurize_samples": (d - c) / 60}, step=0)
-    #         self._log_samples(3)
-    #     else:
-    #         self._init_baskets_from_file(file)
-    #         self._init_samples_in_baskets()
-    #         self._featurize_samples()
-    #         self._log_samples(3)
-    #     dataset, tensor_names = self._create_dataset()
-    #     return dataset, tensor_names
-
     #TODO remove useless rest_api_schema flag after refactoring squad processing
     def dataset_from_dicts(self, dicts, index=None, rest_api_schema=False):
         """
         Contains all the functionality to turn a list of dict objects into a PyTorch Dataset and a
         list of tensor names. This can be used for inference mode.
-
         :param dicts: List of dictionaries where each contains the data of one input sample.
         :type dicts: list of dicts
         :return: a Pytorch dataset and a list of tensor names.
@@ -395,7 +359,6 @@ class TextClassificationProcessor(Processor):
             data_dir=data_dir,
             tasks={},
         )
-        #TODO raise info when no task is added due to missing "metric" or "labels" arg
         if metric and label_list:
             if multilabel:
                 task_type = "multilabel_classification"
@@ -406,6 +369,9 @@ class TextClassificationProcessor(Processor):
                           label_list=label_list,
                           label_column_name=label_column_name,
                           task_type=task_type)
+        else:
+            logger.info("Initialized processor without tasks. Supply `metric` and `label_list` to the constructor for "
+                        "using the default task or add a custom task later via processor.add_task()")
 
     def file_to_dicts(self, file: str) -> [dict]:
         column_mapping = {task["label_column_name"]: task["label_name"] for task in self.tasks.values()}
@@ -421,8 +387,12 @@ class TextClassificationProcessor(Processor):
         return dicts
 
     def _dict_to_samples(self, dictionary: dict, **kwargs) -> [Sample]:
-        # this tokenization also stores offsets
-        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer, self.max_seq_len)
+        # this tokenization also stores offsets and a start_of_word mask
+        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer)
+        # truncate tokens, offsets and start_of_word to max_seq_len that can be handled by the model
+        for seq_name in tokenized.keys():
+            tokenized[seq_name], _, _ = truncate_sequences(seq_a=tokenized[seq_name], seq_b=None, tokenizer=self.tokenizer,
+                                                max_seq_len=self.max_seq_len)
         return [Sample(id=None, clear_text=dictionary, tokenized=tokenized)]
 
     def _sample_to_features(self, sample) -> dict:
@@ -477,14 +447,7 @@ class InferenceProcessor(Processor):
         processor_config_file = os.path.join(load_dir, "processor_config.json")
         config = json.load(open(processor_config_file))
         # init tokenizer
-        tokenizer = TOKENIZER_MAP[config["tokenizer"]].from_pretrained(
-            load_dir,
-            do_lower_case=config["lower_case"],
-            never_split_chars=config.get("never_split_chars", None),
-        )
-        # add custom vocab to tokenizer if available
-        if os.path.exists(os.path.join(load_dir, "custom_vocab.txt")):
-            tokenizer.add_custom_vocab(os.path.join(load_dir, "custom_vocab.txt"))
+        tokenizer = Tokenizer.load(load_dir, tokenizer_class=config["tokenizer"])
         # we have to delete the tokenizer string from config, because we pass it as Object
         del config["tokenizer"]
 
@@ -497,13 +460,16 @@ class InferenceProcessor(Processor):
 
         return processor
 
-
     def file_to_dicts(self, file: str) -> [dict]:
       raise NotImplementedError
 
     def _dict_to_samples(self, dictionary: dict, **kwargs) -> [Sample]:
         # this tokenization also stores offsets
-        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer, self.max_seq_len)
+        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer)
+        # truncate tokens, offsets and start_of_word to max_seq_len that can be handled by the model
+        for seq_name in tokenized.keys():
+            tokenized[seq_name], _, _ = truncate_sequences(seq_a=tokenized[seq_name], seq_b=None, tokenizer=self.tokenizer,
+                                                max_seq_len=self.max_seq_len)
         return [Sample(id=None, clear_text=dictionary, tokenized=tokenized)]
 
     def _sample_to_features(self, sample) -> dict:
@@ -554,6 +520,9 @@ class NERProcessor(Processor):
 
         if metric and label_list:
             self.add_task("ner", metric, label_list)
+        else:
+            logger.info("Initialized processor without tasks. Supply `metric` and `label_list` to the constructor for "
+                        "using the default task or add a custom task later via processor.add_task()")
 
     def file_to_dicts(self, file: str) -> [dict]:
         dicts = read_ner_file(filename=file, sep=self.delimiter)
@@ -561,7 +530,11 @@ class NERProcessor(Processor):
 
     def _dict_to_samples(self, dictionary: dict, **kwargs) -> [Sample]:
         # this tokenization also stores offsets, which helps to map our entity tags back to original positions
-        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer, self.max_seq_len)
+        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer)
+        # truncate tokens, offsets and start_of_word to max_seq_len that can be handled by the model
+        for seq_name in tokenized.keys():
+            tokenized[seq_name], _, _ = truncate_sequences(seq_a=tokenized[seq_name], seq_b=None, tokenizer=self.tokenizer,
+                                                max_seq_len=self.max_seq_len)
         return [Sample(id=None, clear_text=dictionary, tokenized=tokenized)]
 
     def _sample_to_features(self, sample) -> dict:
@@ -616,31 +589,60 @@ class BertStyleLMProcessor(Processor):
         if self.next_sent_pred:
             self.add_task("nextsentence", "acc", ["False", "True"])
 
-
     def file_to_dicts(self, file: str) -> list:
         dicts = read_docs_from_txt(filename=file, delimiter=self.delimiter, max_docs=self.max_docs)
         return dicts
 
     def _dict_to_samples(self, dictionary, all_dicts=None):
+        assert len(all_dicts) > 1, "Need at least 2 documents to sample random sentences from"
         doc = dictionary["doc"]
         samples = []
+
+        # create one sample for each sentence in the doc (except for the very last -> "nextSentence" is impossible)
         for idx in range(len(doc) - 1):
-            text_a, text_b, is_next_label = get_sentence_pair(doc, all_dicts, idx)
-            sample_in_clear_text = {
-                "text_a": text_a,
-                "text_b": text_b,
-                "nextsentence_label": is_next_label,
-            }
             tokenized = {}
-            tokenized["text_a"] = tokenize_with_metadata(
-                text_a, self.tokenizer, self.max_seq_len
-            )
-            tokenized["text_b"] = tokenize_with_metadata(
-                text_b, self.tokenizer, self.max_seq_len
-            )
-            samples.append(
-                Sample(id=None, clear_text=sample_in_clear_text, tokenized=tokenized)
-            )
+            if self.next_sent_pred:
+                text_a, text_b, is_next_label = get_sentence_pair(doc, all_dicts, idx)
+                sample_in_clear_text = {
+                    "text_a": text_a,
+                    "text_b": text_b,
+                    "nextsentence_label": is_next_label,
+                }
+                # tokenize
+                tokenized["text_a"] = tokenize_with_metadata(
+                    text_a, self.tokenizer
+                )
+                tokenized["text_b"] = tokenize_with_metadata(
+                    text_b, self.tokenizer
+                )
+                # truncate to max_seq_len
+                for seq_name in ["tokens", "offsets", "start_of_word"]:
+                    tokenized["text_a"][seq_name], tokenized["text_b"][seq_name], _ = truncate_sequences(
+                        seq_a=tokenized["text_a"][seq_name],
+                        seq_b=tokenized["text_b"][seq_name],
+                        tokenizer=self.tokenizer,
+                        max_seq_len=self.max_seq_len)
+                    samples.append(Sample(id=None, clear_text=sample_in_clear_text, tokenized=tokenized))
+            # if we don't do next sentence prediction, we should feed in a single sentence
+            else:
+                text_a = doc[idx]
+                sample_in_clear_text = {
+                    "text_a": text_a,
+                    "text_b": None,
+                    "nextsentence_label": None,
+                }
+                # tokenize
+                tokenized["text_a"] = tokenize_with_metadata(
+                    text_a, self.tokenizer
+                )
+                # truncate to max_seq_len
+                for seq_name in ["tokens", "offsets", "start_of_word"]:
+                    tokenized["text_a"][seq_name], _, _ = truncate_sequences(
+                        seq_a=tokenized["text_a"][seq_name],
+                        seq_b=None,
+                        tokenizer=self.tokenizer,
+                        max_seq_len=self.max_seq_len)
+                    samples.append(Sample(id=None, clear_text=sample_in_clear_text, tokenized=tokenized))
         return samples
 
     def _sample_to_features(self, sample) -> dict:
@@ -662,7 +664,7 @@ class SquadProcessor(Processor):
         tokenizer,
         max_seq_len,
         data_dir,
-        labels=None,
+        label_list=None,
         metric=None,
         train_filename="train-v2.0.json",
         dev_filename="dev-v2.0.json",
@@ -678,6 +680,10 @@ class SquadProcessor(Processor):
         :type max_seq_len: int
         :param data_dir: The directory in which the train and dev files can be found. Squad has a private test file
         :type data_dir: str
+        :param label_list: list of labels to predict (strings). For most cases this should be: ["start_token", "end_token"]
+        :type label_list: list
+        :param metric: name of metric that shall be used for evaluation, e.g. "squad".
+        :type metric: str
         :param train_filename: The name of the file containing training data.
         :type train_filename: str
         :param dev_filename: The name of the file containing the dev data. If None and 0.0 < dev_split < 1.0 the dev set
@@ -687,8 +693,6 @@ class SquadProcessor(Processor):
         :type test_filename: str
         :param dev_split: The proportion of the train set that will sliced. Only works if dev_filename is set to None
         :type dev_split: float
-        :param data_dir: The directory in which the train, test and perhaps dev files can be found.
-        :type data_dir: str
         :param doc_stride: When the document containing the answer is too long it gets split into part, strided by doc_stride
         :type doc_stride: int
         :param max_query_length: Maximum length of the question (in number of subword tokens)
@@ -714,8 +718,11 @@ class SquadProcessor(Processor):
             tasks={},
         )
 
-        if metric and labels:
-            self.add_task("question_answering", metric, labels)
+        if metric and label_list:
+            self.add_task("question_answering", metric, label_list)
+        else:
+            logger.info("Initialized processor without tasks. Supply `metric` and `label_list` to the constructor for "
+                        "using the default task or add a custom task later via processor.add_task()")
 
     def dataset_from_dicts(self, dicts, index=None, rest_api_schema=False):
         if rest_api_schema:
@@ -762,8 +769,7 @@ class SquadProcessor(Processor):
         for sample in samples:
             tokenized = tokenize_with_metadata(
                 text=" ".join(sample.clear_text["doc_tokens"]),
-                tokenizer=self.tokenizer,
-                max_seq_len=self.max_seq_len,
+                tokenizer=self.tokenizer
             )
             sample.tokenized = tokenized
 
@@ -822,7 +828,6 @@ class RegressionProcessor(Processor):
 
         self.add_task(name="regression", metric="mse", label_list= [scaler_mean, scaler_scale], label_column_name=label_column_name, task_type="regression", label_name=label_name)
 
-
     def file_to_dicts(self, file: str) -> [dict]:
         column_mapping = {task["label_column_name"]: task["label_name"] for task in self.tasks.values()}
         dicts = read_tsv(
@@ -846,7 +851,12 @@ class RegressionProcessor(Processor):
 
     def _dict_to_samples(self, dictionary: dict, **kwargs) -> [Sample]:
         # this tokenization also stores offsets
-        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer, self.max_seq_len)
+        tokenized = tokenize_with_metadata(dictionary["text"], self.tokenizer)
+        # truncate tokens, offsets and start_of_word to max_seq_len that can be handled by the model
+        for seq_name in tokenized.keys():
+            tokenized[seq_name], _, _ = truncate_sequences(seq_a=tokenized[seq_name], seq_b=None,
+                                                           tokenizer=self.tokenizer,
+                                                           max_seq_len=self.max_seq_len)
         # Samples don't have labels during Inference mode
         if "label" in dictionary:
             label = float(dictionary["label"])
